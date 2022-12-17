@@ -50,7 +50,6 @@
 ;; TODO: limit size of *direnv* buffer
 ;; TODO: special handling of compilation-environment?
 ;; TODO: handle use of "cd" and other changes of `default-directory' in a buffer over time?
-;; TODO: handle "allow" asynchronously?
 ;; TODO: describe env
 ;; TODO: click on mode lighter to get details
 ;; TODO: handle when direnv is not installed?
@@ -192,16 +191,17 @@ since its output can vary according to its initial environment."
 All envrc.el-managed buffers with this env will have their
 environments updated."
   (let ((env-dir (envrc--find-env-dir)))
-    (let ((result
-           (if env-dir
-               (let ((cache-key (envrc--cache-key env-dir (default-value 'process-environment))))
-                 (pcase (gethash cache-key envrc--cache 'missing)
-                   (`missing (let ((calculated (envrc--export env-dir)))
-                               (puthash cache-key calculated envrc--cache)
-                               calculated))
-                   (cached cached)))
-             'none)))
-      (envrc--apply (current-buffer) result))))
+    (if env-dir
+        (let ((cache-key (envrc--cache-key env-dir (default-value 'process-environment))))
+          (pcase (gethash cache-key envrc--cache 'missing)
+            (`missing
+             (envrc--export env-dir
+                            (lambda (result)
+                              (puthash cache-key result envrc--cache)
+                              (envrc--apply (current-buffer) result))))
+            (cached (envrc--apply (current-buffer) cached))))
+      (envrc--apply (current-buffer) 'none))))
+
 
 (defmacro envrc--at-end-of-special-buffer (name &rest body)
   "At the end of `special-mode' buffer NAME, execute BODY.
@@ -223,46 +223,38 @@ MSG and ARGS are as for that function."
       (insert (apply 'format msg args))
       (newline))))
 
-(defun envrc--export (env-dir)
+(defun envrc--export (env-dir callback)
   "Export the env vars for ENV-DIR using direnv.
 Return value is either 'error, 'none, or an alist of environment
 variable names and values."
   (unless (envrc--env-dir-p env-dir)
     (error "%s is not a directory with a .envrc" env-dir))
   (message "Running direnv in %s..." env-dir)
-  (let ((stderr-file (make-temp-file "envrc"))
-        result)
-    (unwind-protect
-        (let ((default-directory env-dir))
-          (with-temp-buffer
-            (let ((exit-code (envrc--call-process-with-global-env envrc-direnv-executable nil (list t stderr-file) nil "export" "json")))
-              (envrc--debug "Direnv exited with %s and stderr=%S, stdout=%S"
-                            exit-code
-                            (with-temp-buffer
-                              (insert-file-contents stderr-file)
-                              (buffer-string))
-                            (buffer-string))
-              (if (zerop exit-code)
-                  (progn
-                    (message "Direnv succeeded in %s" env-dir)
-                    (if (zerop (buffer-size))
-                        (setq result 'none)
-                      (goto-char (point-min))
-                      (setq result (let ((json-key-type 'string)) (json-read-object)))))
-                (message "Direnv failed in %s" env-dir)
-                (setq result 'error))
-              (envrc--at-end-of-special-buffer "*envrc*"
-                (insert "==== " (format-time-string "%Y-%m-%d %H:%M:%S") " ==== " env-dir " ====\n\n")
-                (let ((initial-pos (point)))
-                  (insert-file-contents (let (ansi-color-context)
-                                          (ansi-color-apply stderr-file)))
-                  (goto-char (point-max))
-                  (add-face-text-property initial-pos (point) (if (zerop exit-code) 'success 'error)))
-                (insert "\n\n")
-                (unless (zerop exit-code)
-                  (display-buffer (current-buffer)))))))
-      (delete-file stderr-file))
-    result))
+  (envrc--make-process-with-global-env
+   `(,envrc-direnv-executable "export" "json")
+    (lambda (exit-code stdout stderr)
+      (envrc--debug "Direnv exited with %s and stderr=%S, stdout=%S" exit-code stderr stdout)
+      (if (zerop exit-code)
+          (progn
+            (message "Direnv succeeded in %s" env-dir)
+            (if (zerop (buffer-size))
+                (setq result 'none)
+              (goto-char (point-min))
+              (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))))
+        (message "Direnv failed in %s" env-dir)
+        (setq result 'error))
+      (envrc--at-end-of-special-buffer "*envrc*"
+        (insert "==== " (format-time-string "%Y-%m-%d %H:%M:%S") " ==== " env-dir " ====\n\n")
+        (let ((initial-pos (point)))
+          (insert (let (ansi-color-context) (ansi-color-apply stderr)))
+          (goto-char (point-max))
+          (add-face-text-property initial-pos (point) (if (zerop exit-code) 'success 'error)))
+        (insert "\n\n")
+        (unless (zerop exit-code)
+          (message "%s" stderr)))
+      (funcall callback result))))
+
+
 
 ;; Forward declaration for the byte compiler
 (defvar eshell-path-env)
@@ -338,15 +330,29 @@ If there is no current env dir, abort with a user error."
        (user-error "No enclosing .envrc"))
      ,@body))
 
-(defun envrc--call-process-with-global-env (&rest args)
-  "Like `call-process', but always use the global process environment.
+(defun envrc--make-process-with-global-env (command callback)
+  "Starts a process with `make-process', but always use the global process environment.
 In particular, we ensure the default variable `exec-path' and
 `process-environment' are used.  This ensures an .envrc doesn't take
 `envrc-direnv-executable' out of our path.
-ARGS is as for `call-process'."
-  (let ((exec-path (default-value 'exec-path))
-        (process-environment (default-value 'process-environment)))
-    (apply 'call-process args)))
+When the process is finished it will run the provided `callback' function with
+the exit code, stdout and stderr of the process."
+  (let* ((exec-path (default-value 'exec-path))
+         (process-environment (default-value 'process-environment))
+         (stderr-buffer (generate-new-buffer "*direnv stderr*")))
+    (make-process
+     :name "direnv"
+     :command command
+     :buffer (generate-new-buffer "*direnv*")
+     :stderr stderr-buffer
+     :connection-type 'pipe
+     :sentinel (lambda (process event)
+                 (unless (string= event "run\n")
+                   (let* ((stdout (with-current-buffer (process-buffer process) (buffer-string)))
+                          (stderr (with-current-buffer stderr-buffer (buffer-string))))
+                    (funcall callback (process-exit-status process) stdout stderr)
+                    (kill-buffer (process-buffer process))
+                    (kill-buffer stderr-buffer)))))))
 
 (defun envrc-reload ()
   "Reload the current env."
@@ -358,23 +364,33 @@ ARGS is as for `call-process'."
   "Run \"direnv allow\" in the current env."
   (interactive)
   (envrc--with-required-current-env env-dir
-    (let* ((default-directory env-dir)
-           (exit-code (envrc--call-process-with-global-env envrc-direnv-executable nil (get-buffer-create "*envrc-allow*") nil "allow")))
-      (if (zerop exit-code)
-          (envrc--update-env env-dir)
-        (display-buffer "*envrc-allow*")
-        (user-error "Error running direnv allow")))))
+     (let* ((default-directory env-dir))
+        (envrc--make-process-with-global-env
+         `(,envrc-direnv-executable "allow")
+          (lambda (exit-code stdout stderr)
+           (if (zerop exit-code)
+               (with-current-buffer (get-buffer-create "*envrc-allow*")
+                 (erase-buffer)
+                 (insert stdout)
+                 (insert stderr)
+                 (display-buffer (current-buffer)))
+               (user-error "Error running direnv allow")))))))
 
 (defun envrc-deny ()
   "Run \"direnv deny\" in the current env."
   (interactive)
   (envrc--with-required-current-env env-dir
-    (let* ((default-directory env-dir)
-           (exit-code (envrc--call-process-with-global-env envrc-direnv-executable nil (get-buffer-create "*envrc-deny*") nil "deny")))
-      (if (zerop exit-code)
-          (envrc--update-env env-dir)
-        (display-buffer "*envrc-deny*")
-        (user-error "Error running direnv deny")))))
+    (let* ((default-directory env-dir))
+      (envrc--make-process-with-global-env
+       `(,envrc-direnv-executable "deny")
+        (lambda (exit-code stdout stderr)
+         (if (zerop exit-code)
+             (with-current-buffer (get-buffer-create "*envrc-deny*")
+               (erase-buffer)
+               (insert stdout)
+               (insert stderr)
+               (display-buffer (current-buffer)))
+             (user-error "Error running direnv deny")))))))
 
 (defun envrc-reload-all ()
   "Reload direnvs for all buffers.
