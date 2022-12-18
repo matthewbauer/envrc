@@ -74,6 +74,7 @@
 Messages are written into the *envrc-debug* buffer."
   :type 'boolean)
 
+;; FIXME in some context this seems to void... Currently unused
 (defcustom envrc-direnv-executable "direnv"
   "The direnv executable used by envrc."
   :type 'string)
@@ -231,7 +232,7 @@ variable names and values."
     (error "%s is not a directory with a .envrc" env-dir))
   (message "Running direnv in %s..." env-dir)
   (envrc--make-process-with-global-env
-   `(,envrc-direnv-executable "export" "json")
+   `("direnv" "export" "json")
     (lambda (exit-code stdout stderr)
       (envrc--debug "Direnv exited with %s and stderr=%S, stdout=%S" exit-code stderr stdout)
       (if (zerop exit-code)
@@ -366,7 +367,7 @@ the exit code, stdout and stderr of the process."
   (envrc--with-required-current-env env-dir
      (let* ((default-directory env-dir))
         (envrc--make-process-with-global-env
-         `(,envrc-direnv-executable "allow")
+         `("direnv" "allow")
           (lambda (exit-code stdout stderr)
            (if (zerop exit-code)
                (with-current-buffer (get-buffer-create "*envrc-allow*")
@@ -382,7 +383,7 @@ the exit code, stdout and stderr of the process."
   (envrc--with-required-current-env env-dir
     (let* ((default-directory env-dir))
       (envrc--make-process-with-global-env
-       `(,envrc-direnv-executable "deny")
+       `("direnv" "deny")
         (lambda (exit-code stdout stderr)
          (if (zerop exit-code)
              (with-current-buffer (get-buffer-create "*envrc-deny*")
