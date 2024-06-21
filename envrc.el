@@ -238,9 +238,8 @@ variable names and values."
       (if (zerop exit-code)
           (progn
             (message "Direnv succeeded in %s" env-dir)
-            (if (zerop (buffer-size))
+            (if (length= stdout 0)
                 (setq result 'none)
-              (goto-char (point-min))
               (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))))
         (message "Direnv failed in %s" env-dir)
         (setq result 'error))
