@@ -5,8 +5,8 @@
 ;; Author: Steve Purcell <steve@sanityinc.com>
 ;; Keywords: processes, tools
 ;; Homepage: https://github.com/purcell/envrc
-;; Package-Requires: ((seq "2") (emacs "25.1") (inheritenv "0.1"))
-;; Package-Version: 0
+;; Package-Requires: ((emacs "26.1") (inheritenv "0.1"))
+;; Package-Version: 0.12
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -61,6 +61,7 @@
 (require 'subr-x)
 (require 'ansi-color)
 (require 'cl-lib)
+(require 'diff-mode) ; for its faces
 (require 'inheritenv)
 (require 'comint)
 
@@ -75,7 +76,15 @@
 Messages are written into the *envrc-debug* buffer."
   :type 'boolean)
 
-;; FIXME in some context this seems to void... Currently unused
+(defcustom envrc-update-on-eshell-directory-change t
+  "Whether envrc will update environment when changing directory in eshell."
+  :type 'boolean)
+
+(defcustom envrc-show-summary-in-minibuffer t
+  "When non-nil, show a summary of the changes made by direnv in the minibuffer."
+  :group 'envrc
+  :type 'boolean)
+
 (defcustom envrc-direnv-executable "direnv"
   "The direnv executable used by envrc."
   :type 'string)
@@ -105,17 +114,18 @@ You can set this to nil to disable the lighter."
     (define-key map (kbd "a") 'envrc-allow)
     (define-key map (kbd "d") 'envrc-deny)
     (define-key map (kbd "r") 'envrc-reload)
+    (define-key map (kbd "l") 'envrc-show-log)
     map)
   "Keymap for commands in `envrc-mode'.
 See `envrc-mode-map' for how to assign a prefix binding to these."
-  :type 'keymap)
+  :type '(restricted-sexp :match-alternatives (keymapp)))
 (fset 'envrc-command-map envrc-command-map)
 
 (defcustom envrc-mode-map (make-sparse-keymap)
   "Keymap for `envrc-mode'.
 To access `envrc-command-map' from this map, give it a prefix keybinding,
-e.g. (define-key envrc-mode-map (kbd \"C-c e\") 'envrc-command-map)"
-  :type 'keymap)
+e.g. (define-key envrc-mode-map (kbd \"C-c e\") \\='envrc-command-map)"
+  :type '(restricted-sexp :match-alternatives (keymapp)))
 
 ;;;###autoload
 (define-minor-mode envrc-mode
@@ -124,12 +134,17 @@ e.g. (define-key envrc-mode-map (kbd \"C-c e\") 'envrc-command-map)"
   :lighter envrc-lighter
   :keymap envrc-mode-map
   (if envrc-mode
-      (envrc--update)
-    (envrc--clear (current-buffer))))
+      (progn
+        (envrc--update)
+        (when (and (derived-mode-p 'eshell-mode) envrc-update-on-eshell-directory-change)
+          (add-hook 'eshell-directory-change-hook #'envrc--update nil t)))
+    (envrc--clear (current-buffer))
+    (remove-hook 'eshell-directory-change-hook #'envrc--update t)))
 
 ;;;###autoload
 (define-globalized-minor-mode envrc-global-mode envrc-mode
-  (lambda () (unless (or (minibufferp) (file-remote-p default-directory))
+  (lambda () (when (and (not (minibufferp)) (not (file-remote-p default-directory))
+                        (executable-find envrc-direnv-executable))
                (envrc-mode 1))))
 
 (defface envrc-mode-line-on-face '((t :inherit success))
@@ -154,7 +169,7 @@ The values are as produced by `envrc--export'.")
 
 (defvar-local envrc--status 'none
   "Symbol indicating state of the current buffer's direnv.
-One of '(none on error).")
+One of \\='(none on error).")
 
 ;;; Internals
 
@@ -228,9 +243,35 @@ MSG and ARGS are as for that function."
       (insert (apply 'format msg args))
       (newline))))
 
+(defun envrc--summarise-changes (items)
+  "Create a summary string for ITEMS."
+  (if items
+      (cl-loop for (name . val) in items
+               if (not (string-prefix-p "DIRENV_" name))
+               collect (cons name
+                             (if val
+                                 (if (let ((process-environment (default-value 'process-environment)))
+                                       (getenv name))
+                                     '("~" diff-changed)
+                                   '("+" diff-added))
+                               '("-" diff-removed)))
+               into entries
+               finally return (cl-loop for (name prefix face) in (seq-sort-by 'car 'string< entries)
+                                       collect (propertize (concat prefix name) 'face face) into strings
+                                       finally return (string-join strings " ")))
+    "no changes"))
+
+(defun envrc--show-summary (result directory)
+  "Summarise successful RESULT in the minibuffer.
+DIRECTORY is the directory in which the environment changes."
+  (message "direnv: %s %s"
+           (envrc--summarise-changes result)
+           (propertize (concat "(" (abbreviate-file-name (directory-file-name directory)) ")")
+                       'face 'font-lock-comment-face)))
+
 (defun envrc--export (env-dir callback)
   "Export the env vars for ENV-DIR using direnv.
-Return value is either 'error, 'none, or an alist of environment
+Return value is either \\='error, \\='none, or an alist of environment
 variable names and values."
   (unless (envrc--env-dir-p env-dir)
     (error "%s is not a directory with a .envrc" env-dir))
@@ -248,7 +289,10 @@ variable names and values."
                 (message "Direnv succeeded in %s" env-dir)
                 (if (length= stdout 0)
                     (setq result 'none)
-                  (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))))
+                  (prog1
+                      (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))
+                    (when envrc-show-summary-in-minibuffer
+                          (envrc--show-summary result env-dir)))))
             (message "Direnv failed in %s" env-dir)
             (setq result 'error))
           (envrc--at-end-of-special-buffer "*envrc*"
@@ -258,7 +302,7 @@ variable names and values."
               (goto-char (point-max))
               (add-face-text-property initial-pos (point) (if (zerop exit-code) 'success 'error)))
             (insert "\n\n")
-            (unless (zerop exit-code)
+            (unless (eq 0 exit-code) ;; zerop is not an option, as exit-code may sometimes be a symbol
               (message "%s" stderr)))
 
           ;; check again for callbacks in case they got added while this was running
@@ -293,6 +337,7 @@ also appear in PAIRS."
   (with-current-buffer buf
     (kill-local-variable 'exec-path)
     (kill-local-variable 'process-environment)
+    (kill-local-variable 'info-directory-list)
     (when (derived-mode-p 'eshell-mode)
       (if (fboundp 'eshell-set-path)
           (eshell-set-path (butlast exec-path))
@@ -314,7 +359,9 @@ also appear in PAIRS."
         (when (derived-mode-p 'eshell-mode)
           (if (fboundp 'eshell-set-path)
               (eshell-set-path path)
-            (setq-local eshell-path-env path)))))))
+            (setq-local eshell-path-env path))))
+      ;; Force info.el to parse INFOPATH again in case direnv modified it
+      (when (getenv "INFOPATH") (setq-local Info-directory-list nil)))))
 
 (defun envrc--update-env (env-dir)
   "Refresh the state of the direnv in ENV-DIR and apply in all relevant buffers."
@@ -404,7 +451,12 @@ the exit code, stdout and stderr of the process."
   "Reload the current env."
   (interactive)
   (envrc--with-required-current-env env-dir
-    (envrc--update-env env-dir)))
+    (let* ((default-directory env-dir)
+           (exit-code (envrc--call-process-with-global-env envrc-direnv-executable nil (get-buffer-create "*envrc-reload*") nil "reload")))
+      (if (zerop exit-code)
+          (envrc--update-env env-dir)
+        (display-buffer "*envrc-reload*")
+        (user-error "Error running direnv reload")))))
 
 (defun envrc-allow ()
   "Run \"direnv allow\" in the current env."
@@ -448,6 +500,12 @@ This can be useful if a .envrc has been deleted."
     (with-current-buffer buf
       (envrc--update))))
 
+(defun envrc-show-log ()
+  "Open envrc log buffer."
+  (interactive)
+  (if-let ((buffer (get-buffer "*envrc*")))
+      (pop-to-buffer buffer)
+    (message "Envrc log buffer does not exist")))
 
 
 ;;; Propagate local environment to commands that use temp buffers
@@ -477,11 +535,14 @@ in a temp buffer.  ARGS is as for ORIG."
     "use" "use_guix" "use_flake" "use_nix" "user_rel_path" "watch_dir" "watch_file")
   "Useful direnv keywords to be highlighted.")
 
+(declare-function sh-set-shell "sh-script")
+
 ;;;###autoload
 (define-derived-mode envrc-file-mode
   sh-mode "envrc"
   "Major mode for .envrc files as used by direnv.
 \\{envrc-file-mode-map}"
+  (sh-set-shell "bash")
   (font-lock-add-keywords
    nil `((,(regexp-opt envrc-file-extra-keywords 'symbols)
           (0 font-lock-keyword-face)))))
@@ -496,5 +557,6 @@ in a temp buffer.  ARGS is as for ORIG."
 ;; LocalWords:  envrc direnv
 
 ;; Local Variables:
+;; coding: utf-8
 ;; indent-tabs-mode: nil
 ;; End:
