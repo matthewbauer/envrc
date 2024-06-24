@@ -62,6 +62,7 @@
 (require 'ansi-color)
 (require 'cl-lib)
 (require 'inheritenv)
+(require 'comint)
 
 ;;; Custom vars and minor modes
 
@@ -330,6 +331,32 @@ If there is no current env dir, abort with a user error."
        (user-error "No enclosing .envrc"))
      ,@body))
 
+(defun envrc--filter (proc string)
+  "Process filter for envrc."
+  (when (buffer-live-p (process-buffer proc))
+    (with-current-buffer (process-buffer proc)
+      (let ((inhibit-read-only t)
+            ;; `save-excursion' doesn't use the right insertion-type for us.
+            (pos (copy-marker (point) t))
+            ;; `save-restriction' doesn't use the right insertion type either:
+            ;; If we are inserting at the end of the accessible part of the
+            ;; buffer, keep the inserted text visible.
+	    (min (point-min-marker))
+	    (max (copy-marker (point-max) t))
+	    (envrc-filter-start (marker-position (process-mark proc))))
+        (unwind-protect
+            (progn
+	      (widen)
+	      (goto-char envrc-filter-start)
+              (insert string)
+              (comint-carriage-motion (process-mark proc) (point))
+              (set-marker (process-mark proc) (point)))
+	  (goto-char pos)
+          (narrow-to-region min max)
+	  (set-marker pos nil)
+	  (set-marker min nil)
+	  (set-marker max nil))))))
+
 (defun envrc--make-process-with-global-env (command callback)
   "Starts a process with `make-process', but always use the global process environment.
 In particular, we ensure the default variable `exec-path' and
@@ -339,13 +366,18 @@ When the process is finished it will run the provided `callback' function with
 the exit code, stdout and stderr of the process."
   (let* ((exec-path (default-value 'exec-path))
          (process-environment (default-value 'process-environment))
-         (stderr-buffer (generate-new-buffer "*direnv stderr*")))
+         (stderr-buffer (generate-new-buffer "*direnv stderr*"))
+         (stdout-buffer (generate-new-buffer "*direnv*")))
+    (with-current-buffer stderr-buffer (setq buffer-read-only t))
+    (with-current-buffer stdout-buffer (setq buffer-read-only t))
     (make-process
      :name "direnv"
      :command command
-     :buffer (generate-new-buffer "*direnv*")
+     :buffer stdout-buffer
      :stderr stderr-buffer
      :connection-type 'pipe
+     :noquery t
+     :filter #'envrc--filter
      :sentinel (lambda (process event)
                  (unless (string= event "run\n")
                    (let* ((stdout (with-current-buffer (process-buffer process) (buffer-string)))
