@@ -147,6 +147,9 @@ e.g. (define-key envrc-mode-map (kbd \"C-c e\") 'envrc-command-map)"
   "Known envrc directories and their direnv results.
 The values are as produced by `envrc--export'.")
 
+(defvar envrc--running-processes-callbacks (make-hash-table :test 'equal :size 10)
+  "Callbacks for each process running by envrc.")
+
 ;;; Local state
 
 (defvar-local envrc--status 'none
@@ -231,29 +234,40 @@ Return value is either 'error, 'none, or an alist of environment
 variable names and values."
   (unless (envrc--env-dir-p env-dir)
     (error "%s is not a directory with a .envrc" env-dir))
-  (message "Running direnv in %s..." env-dir)
-  (envrc--make-process-with-global-env
-   `("direnv" "export" "json")
-    (lambda (exit-code stdout stderr)
-      (envrc--debug "Direnv exited with %s and stderr=%S, stdout=%S" exit-code stderr stdout)
-      (if (zerop exit-code)
-          (progn
-            (message "Direnv succeeded in %s" env-dir)
-            (if (length= stdout 0)
-                (setq result 'none)
-              (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))))
-        (message "Direnv failed in %s" env-dir)
-        (setq result 'error))
-      (envrc--at-end-of-special-buffer "*envrc*"
-        (insert "==== " (format-time-string "%Y-%m-%d %H:%M:%S") " ==== " env-dir " ====\n\n")
-        (let ((initial-pos (point)))
-          (insert (let (ansi-color-context) (ansi-color-apply stderr)))
-          (goto-char (point-max))
-          (add-face-text-property initial-pos (point) (if (zerop exit-code) 'success 'error)))
-        (insert "\n\n")
-        (unless (zerop exit-code)
-          (message "%s" stderr)))
-      (funcall callback result))))
+  (let ((cache-key (envrc--cache-key env-dir (default-value 'process-environment))))
+    (pcase (gethash cache-key envrc--running-processes-callbacks 'missing)
+      (`missing
+       (message "Running direnv in %s..." env-dir)
+       (puthash cache-key (cons callback ()) envrc--running-processes-callbacks)
+       (envrc--make-process-with-global-env
+        `("direnv" "export" "json")
+        (lambda (exit-code stdout stderr)
+          (envrc--debug "Direnv exited with %s and stderr=%S, stdout=%S" exit-code stderr stdout)
+          (if (zerop exit-code)
+              (progn
+                (message "Direnv succeeded in %s" env-dir)
+                (if (length= stdout 0)
+                    (setq result 'none)
+                  (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))))
+            (message "Direnv failed in %s" env-dir)
+            (setq result 'error))
+          (envrc--at-end-of-special-buffer "*envrc*"
+            (insert "==== " (format-time-string "%Y-%m-%d %H:%M:%S") " ==== " env-dir " ====\n\n")
+            (let ((initial-pos (point)))
+              (insert (let (ansi-color-context) (ansi-color-apply stderr)))
+              (goto-char (point-max))
+              (add-face-text-property initial-pos (point) (if (zerop exit-code) 'success 'error)))
+            (insert "\n\n")
+            (unless (zerop exit-code)
+              (message "%s" stderr)))
+
+          ;; check again for callbacks in case they got added while this was running
+          (pcase (gethash cache-key envrc--running-processes-callbacks 'missing)
+            (`missing (error "envrc--export: no callbacks found"))
+            (callbacks
+             (remhash cache-key envrc--running-processes-callbacks)
+             (dolist (x callbacks) (funcall x result)))))))
+      (callbacks (puthash cache-key (push callback callbacks) envrc--running-processes-callbacks)))))
 
 
 
