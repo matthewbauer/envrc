@@ -287,7 +287,7 @@ variable names and values."
           (if (zerop exit-code)
               (progn
                 (message "Direnv succeeded in %s" env-dir)
-                (if (length= stdout 0)
+                (if (eq (length stdout) 0)
                     (setq result 'none)
                   (prog1
                       (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))
