@@ -276,7 +276,8 @@ Return value is either \\='error, \\='none, or an alist of environment
 variable names and values."
   (unless (envrc--env-dir-p env-dir)
     (error "%s is not a directory with a .envrc" env-dir))
-  (let ((cache-key (envrc--cache-key env-dir (default-value 'process-environment))))
+  (let ((cache-key (envrc--cache-key env-dir (default-value 'process-environment)))
+        result)
     (pcase (gethash cache-key envrc--running-processes-callbacks 'missing)
       (`missing
        (message "Running direnv in %s..." env-dir)
