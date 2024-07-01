@@ -220,7 +220,7 @@ All envrc.el-managed buffers with this env will have their
 environments updated."
   (let ((env-dir (envrc--find-env-dir))
         (buf (current-buffer)))
-    (setq-local envrc--status (if (listp result) 'updating result))
+    (setq-local envrc--status 'updating)
     (if env-dir
         (let ((cache-key (envrc--cache-key env-dir (default-value 'process-environment))))
           (pcase (gethash cache-key envrc--cache 'missing)
