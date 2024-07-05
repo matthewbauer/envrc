@@ -97,7 +97,7 @@ You can set this to nil to disable the lighter."
   :type 'sexp)
 (put 'envrc-lighter 'risky-local-variable t)
 
-(defcustom envrc-none-lighter '(" envrc[" (:propertize "none" face envrc-mode-line-none-face) "]")
+(defcustom envrc-none-lighter nil
   "Lighter spec used by the default `envrc-lighter' when envrc is inactive."
   :type 'sexp)
 
