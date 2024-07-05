@@ -303,7 +303,7 @@ variable names and values."
                   (prog1
                       (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))
                     (when envrc-show-summary-in-minibuffer
-                          (envrc--show-summary result env-dir)))))
+                      (envrc--show-summary result env-dir)))))
             (message "Direnv failed in %s" env-dir)
             (setq result 'error))
           (envrc--at-end-of-special-buffer "*envrc*"
@@ -454,9 +454,9 @@ the exit code, stdout and stderr of the process."
                  (unless (string= event "run\n")
                    (let* ((stdout (with-current-buffer (process-buffer process) (buffer-string)))
                           (stderr (with-current-buffer stderr-buffer (buffer-string))))
-                    (funcall callback (process-exit-status process) stdout stderr)
-                    (kill-buffer (process-buffer process))
-                    (kill-buffer stderr-buffer)))))))
+                     (funcall callback (process-exit-status process) stdout stderr)
+                     (kill-buffer (process-buffer process))
+                     (kill-buffer stderr-buffer)))))))
 
 (defun envrc-reload ()
   "Reload the current env."
@@ -468,17 +468,17 @@ the exit code, stdout and stderr of the process."
   "Run \"direnv allow\" in the current env."
   (interactive)
   (envrc--with-required-current-env env-dir
-     (let* ((default-directory env-dir))
-        (envrc--make-process-with-global-env
-         `("direnv" "allow")
-          (lambda (exit-code stdout stderr)
-           (if (zerop exit-code)
-               (with-current-buffer (get-buffer-create "*envrc-allow*")
-                 (erase-buffer)
-                 (insert stdout)
-                 (insert stderr)
-                 (display-buffer (current-buffer)))
-               (user-error "Error running direnv allow")))))))
+    (let* ((default-directory env-dir))
+      (envrc--make-process-with-global-env
+       `("direnv" "allow")
+       (lambda (exit-code stdout stderr)
+         (if (zerop exit-code)
+             (with-current-buffer (get-buffer-create "*envrc-allow*")
+               (erase-buffer)
+               (insert stdout)
+               (insert stderr)
+               (display-buffer (current-buffer)))
+           (user-error "Error running direnv allow")))))))
 
 (defun envrc-deny ()
   "Run \"direnv deny\" in the current env."
@@ -487,14 +487,14 @@ the exit code, stdout and stderr of the process."
     (let* ((default-directory env-dir))
       (envrc--make-process-with-global-env
        `("direnv" "deny")
-        (lambda (exit-code stdout stderr)
+       (lambda (exit-code stdout stderr)
          (if (zerop exit-code)
              (with-current-buffer (get-buffer-create "*envrc-deny*")
                (erase-buffer)
                (insert stdout)
                (insert stderr)
                (display-buffer (current-buffer)))
-             (user-error "Error running direnv deny")))))))
+           (user-error "Error running direnv deny")))))))
 
 (defun envrc-reload-all ()
   "Reload direnvs for all buffers.
