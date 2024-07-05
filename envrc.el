@@ -91,7 +91,9 @@ Messages are written into the *envrc-debug* buffer."
 
 (define-obsolete-variable-alias 'envrc--lighter 'envrc-lighter "2021-05-17")
 
-(defcustom envrc-lighter '(:eval (envrc--lighter))
+(defcustom envrc-lighter '(:propertize (:eval (envrc--lighter))
+                                       mouse-face mode-line-highlight
+                                       local-map (keymap (mode-line keymap (down-mouse-1 . envrc-show-log))))
   "The mode line lighter for `envrc-mode'.
 You can set this to nil to disable the lighter."
   :type 'sexp)
