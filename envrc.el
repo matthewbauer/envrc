@@ -307,7 +307,7 @@ DIRECTORY is the directory in which the environment changes."
         result
         process)
     (message "Running direnv in %s..." env-dir)
-    (puthash cache-key (cons callback ()) envrc--running-processes-callbacks)
+    (puthash cache-key (cons callback (gethash cache-key envrc--running-processes-callbacks)) envrc--running-processes-callbacks)
     (puthash cache-key (envrc--make-process-with-global-env
                         `("direnv" "export" "json")
                         (lambda (exit-code stdout stderr)
