@@ -356,7 +356,9 @@ DIRECTORY is the directory in which the environment changes."
        (let ((process (gethash cache-key envrc--running-process)))
          (if (and process (memq (process-status proc) '(open run stop)))
              (puthash cache-key (push callback callbacks) envrc--running-processes-callbacks)
-           (remhash cache-key envrc--running-process)))))))
+           (progn
+             (remhash cache-key envrc--running-process)
+             (envrc--export-new-process env-dir callback))))))))
 
 ;; Forward declaration for the byte compiler
 (defvar eshell-path-env)
