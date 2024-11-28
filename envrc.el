@@ -335,7 +335,7 @@ DIRECTORY is the directory in which the environment changes."
 
                           ;; check again for callbacks in case they got added while this was running
                           (pcase (gethash cache-key envrc--running-processes-callbacks 'missing)
-                            (`missing (error "envrc--export: no callbacks found"))
+                            (`missing nil)
                             (callbacks
                              (remhash cache-key envrc--running-processes-callbacks)
                              (dolist (x callbacks) (funcall x result))))
