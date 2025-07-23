@@ -321,10 +321,9 @@ DIRECTORY is the directory in which the environment changes."
                                       (setq result (let ((json-key-type 'string)) (json-read-from-string stdout)))
                                     (when envrc-show-summary-in-minibuffer
                                       (envrc--show-summary result env-dir)))))
-                            (message "Direnv failed in %s" env-dir)
-                            (setq result 'error)
-                            (setq envrc--running-processes-callbacks (make-hash-table :test 'equal :size 10))
-                            (setq envrc--running-processes (make-hash-table :test 'equal :size 10)))
+                            (progn
+                              (message "Direnv failed in %s" env-dir)
+                              (setq result 'error)))
                           (envrc--at-end-of-special-buffer (envrc--log-buffer-name)
                             (insert "==== " (format-time-string "%Y-%m-%d %H:%M:%S") " ==== " env-dir " ====\n\n")
                             (let ((initial-pos (point)))
@@ -357,7 +356,7 @@ DIRECTORY is the directory in which the environment changes."
        ;; Make sure process is still running.
        (let ((process (gethash cache-key envrc--running-processes)))
          (if (and process (memq (process-status process) '(open run stop)))
-             (puthash cache-key (push callback callbacks) envrc--running-processes-callbacks)
+             (puthash cache-key (cons callback callbacks) envrc--running-processes-callbacks)
            (progn
              (remhash cache-key envrc--running-processes)
              (envrc--export-new-process env-dir callback))))))))
